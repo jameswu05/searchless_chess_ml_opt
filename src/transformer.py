@@ -45,6 +45,8 @@ class TransformerConfig:
   output_size: int | None = None
   # The dimension of the first embedding.
   embedding_dim: int = 64
+  # The dimension of the last embedding
+  latent_dim: int = 128
   # The number of multi-head attention layers.
   num_layers: int = 4
   # The number of heads per layer.
@@ -134,6 +136,21 @@ class MultiHeadDotProductAttention(hk.Module):
     output = jnp.reshape(output, (batch_size, sequence_length, num_hiddens))
     return hk.Linear(embedding_size, with_bias=False)(output)
 
+class LatentHead(hk.Module):
+  def __init__(self, latent_dim: int):
+    super().__init__()
+    self.latent_dim = latent_dim
+  
+  def __call__(self, h: jax.Array, rng_key):
+    mu = hk.Linear(self.latent_dim)(h)
+    log_sigma = hk.Linear(self.latent_dim)(h)
+
+    sigma = jnp.exp(log_sigma)
+    eps = jax.random.normal(rng_key, shape=mu.shape)
+
+    z = mu + sigma * eps
+
+    return z, mu, log_sigma
 
 def sinusoid_position_encoding(
     sequence_length: int,
@@ -272,8 +289,13 @@ def transformer_decoder(
 
   if config.apply_post_ln:
     h = layer_norm(h)
-  logits = hk.Linear(config.output_size)(h)
-  return jnn.log_softmax(logits, axis=-1)
+
+  h_pooled = jnp.mean(h, axis=1)
+  latent_head = LatentHead(config.latent_dim)
+  z, mu, log_sigma = latent_head(h_pooled)
+  logits = hk.Linear(config.output_size)(z)
+  log_probs = jnn.log_softmax(logits, axis=-1)
+  return log_probs, mu, log_sigma
 
 
 def build_transformer_predictor(
