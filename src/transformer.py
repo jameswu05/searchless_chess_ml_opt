@@ -45,7 +45,8 @@ class TransformerConfig:
   output_size: int | None = None
   # The dimension of the first embedding.
   embedding_dim: int = 64
-  # The dimension of the last embedding
+  # The number of latent tokens
+  latent_tokens: int = 16
   latent_dim: int = 128
   # The number of multi-head attention layers.
   num_layers: int = 4
@@ -135,6 +136,33 @@ class MultiHeadDotProductAttention(hk.Module):
     output = jnp.einsum('bhtT,bThd->bthd', normalized_attention, v)
     output = jnp.reshape(output, (batch_size, sequence_length, num_hiddens))
     return hk.Linear(embedding_size, with_bias=False)(output)
+  
+class MultiHeadLatentAttention(hk.Module):
+  def __init__(self, num_latents, embed_dim, num_heads):
+    super().__init__()
+    self.num_latents = num_latents
+    self.embed_dim = embed_dim
+    self.num_heads = num_heads
+
+  def __call__(self, h: jax.Array):
+    B, T, H = h.shape
+
+    latents = hk.get_parameter(
+      "latent_queries",
+      shape=[self.num_latents, H],
+      init=hk.initializers.TruncatedNormal(0.02)
+    )
+
+    latents = jnp.broadcast_to(latents, (B, self.num_latents, H))
+
+    attn = MultiHeadDotProductAttention(
+      num_heads = self.num_heads,
+      num_hiddens_per_head=H // self.num_heads,
+    )
+
+    z = attn(inputs_q=latents, inputs_kv=h)
+
+    return z
 
 class LatentHead(hk.Module):
   def __init__(self, latent_dim: int):
@@ -145,7 +173,7 @@ class LatentHead(hk.Module):
     mu = hk.Linear(self.latent_dim)(h)
     log_sigma = hk.Linear(self.latent_dim)(h)
 
-    sigma = jnp.exp(log_sigma)
+    sigma = jnp.exp(0.5 * log_sigma)
     eps = jax.random.normal(rng_key, shape=mu.shape)
 
     z = mu + sigma * eps
@@ -184,12 +212,12 @@ def sinusoid_position_encoding(
   )
   return embeddings[:, :hidden_size]
 
-
+"""
 def embed_sequences(
     sequences: jax.Array,
     config: TransformerConfig,
 ) -> jax.Array:
-  """Returns embeddings for sequences of tokens."""
+  # Returns embeddings for sequences of tokens.
   embs_init = hk.initializers.TruncatedNormal(stddev=config.emb_init_scale)
   embeddings_layer = hk.Embed(
       vocab_size=config.vocab_size,
@@ -215,6 +243,25 @@ def embed_sequences(
           embed_dim=embedding_size,
       )(positions)
   return embeddings + pos_encodings
+"""
+
+def embed_sequences(sequences, config):
+  emb = hk.Embed(
+      vocab_size=config.vocab_size,
+      embed_dim=config.embedding_dim,
+      w_init=hk.initializers.TruncatedNormal(config.emb_init_scale),
+  )(sequences)
+
+  emb *= jnp.sqrt(config.embedding_dim)
+
+  _, T, H = emb.shape
+
+  if config.pos_encodings == PositionalEncodings.SINUSOID:
+    pos = sinusoid_position_encoding(T, H)
+  else:
+    pos = hk.Embed(config.max_sequence_length, H)(jnp.arange(T))
+
+  return emb + pos
 
 
 def layer_norm(x: jax.Array) -> jax.Array:
@@ -228,18 +275,25 @@ def shift_right(sequences: jax.Array) -> jax.Array:
   padded_sequences = jnp.concatenate([bos_array, sequences], axis=1)
   return padded_sequences[:, :-1]
 
-
+"""
 def _mlp_block(inputs: jax.Array, config: TransformerConfig) -> jax.Array:
-  """Gated MLP block for the Transformer."""
+  # Gated MLP block for the Transformer.
   ffn_dim = config.embedding_dim * config.widening_factor
   split_1 = hk.Linear(ffn_dim, with_bias=False)(inputs)
   split_2 = hk.Linear(ffn_dim, with_bias=False)(inputs)
   gate_output = jnn.silu(split_1) * split_2
   return hk.Linear(config.embedding_dim, with_bias=False)(gate_output)
+"""
 
+def _mlp_block(x, config):
+  ffn_dim = config.embedding_dim * config.widening_factor
+  a = hk.Linear(ffn_dim, with_bias=False)(x)
+  b = hk.Linear(ffn_dim, with_bias=False)(x)
+  return hk.Linear(config.embedding_dim, with_bias=False)(jnn.silu(a) * b)
 
+"""
 def _attention_block(inputs: jax.Array, config: TransformerConfig) -> jax.Array:
-  """Attention block for the Transformer."""
+  # Attention block for the Transformer.
   batch_size, sequence_length = inputs.shape[:2]
   if config.use_causal_mask:
     causal_mask = np.tril(
@@ -253,24 +307,28 @@ def _attention_block(inputs: jax.Array, config: TransformerConfig) -> jax.Array:
       apply_qk_layernorm=config.apply_qk_layernorm,
   )
   return block(inputs_q=inputs, inputs_kv=inputs, mask=causal_mask)
+"""
+def _attention_block(x, config):
+  B, T = x.shape[:2]
 
+  if config.use_causal_mask:
+    mask = np.tril(np.ones((B, 1, T, T)))
+  else:
+    mask = None
 
+  attn = MultiHeadDotProductAttention(
+      num_heads=config.num_heads,
+      num_hiddens_per_head=config.embedding_dim // config.num_heads,
+      apply_qk_layernorm=config.apply_qk_layernorm,
+  )
+
+  return attn(x, x, mask)
+
+"""
 def transformer_decoder(
     targets: jax.Array,
     config: TransformerConfig,
 ) -> jax.Array:
-  """Returns the transformer decoder output, shape [B, T, V].
-
-  Follows the LLaMa architecture:
-  https://github.com/facebookresearch/llama/blob/main/llama/model.py
-  Main changes to the original Transformer decoder:
-  - Using gating in the MLP block, with SwiGLU activation function.
-  - Using normalization before the attention and MLP blocks.
-
-  Args:
-    targets: The integer target values, shape [B, T].
-    config: The config to use for the transformer.
-  """
   # Right shift the targets to get the inputs (the first token is now a 0).
   inputs = shift_right(targets)
 
@@ -295,6 +353,35 @@ def transformer_decoder(
   z, mu, log_sigma = latent_head(h_pooled)
   logits = hk.Linear(config.output_size)(z)
   log_probs = jnn.log_softmax(logits, axis=-1)
+  return log_probs, mu, log_sigma
+"""
+
+def transformer_decoder(targets, config):
+  inputs = shift_right(targets)
+  h = embed_sequences(inputs, config)
+
+  for _ in range(config.num_layers):
+    h = h + _attention_block(layer_norm(h), config)
+    h = h + _mlp_block(layer_norm(h), config)
+
+  if config.apply_post_ln:
+    h = layer_norm(h)
+
+  latent_attn = MultiHeadLatentAttention(
+      config.latent_tokens,
+      config.embedding_dim,
+      config.num_heads,
+  )
+
+  z_tokens = latent_attn(h)          # [B, L, H]
+  h_pooled = jnp.mean(z_tokens, axis=1)
+
+  latent_head = LatentHead(config.latent_dim)
+  z, mu, log_sigma = latent_head(h_pooled)
+
+  logits = hk.Linear(config.output_size)(z)
+  log_probs = jnn.log_softmax(logits, axis=-1)
+
   return log_probs, mu, log_sigma
 
 
