@@ -37,7 +37,10 @@ Sequences = jtp.UInt32[jtp.Array, 'B T']
 # all sequence s, time t and token in the alphabet).
 Marginals = jtp.Float32[jtp.Array, '*B']
 Conditionals = jtp.Float32[jtp.Array, '*B T F']
-Predictions = Marginals | Conditionals
+LogProbs = jtp.Float32[jtp.Array, 'B F']
+Latents = jtp.Float32[jtp.Array, 'B D']
+VAEOutputs = tuple[LogProbs, Latents, Latents]
+Predictions = Marginals | Conditionals | VAEOutputs
 
 # True means the loss will be masked there, i.e. we ignore it.
 LossMask = jtp.Bool[jtp.Array, 'B T']

@@ -161,7 +161,6 @@ class MultiHeadLatentAttention(hk.Module):
     )
 
     z = attn(inputs_q=latents, inputs_kv=h)
-
     return z
 
 class LatentHead(hk.Module):
@@ -169,13 +168,12 @@ class LatentHead(hk.Module):
     super().__init__()
     self.latent_dim = latent_dim
   
-  def __call__(self, h: jax.Array, rng_key):
+  def __call__(self, h: jax.Array):
     mu = hk.Linear(self.latent_dim)(h)
     log_sigma = hk.Linear(self.latent_dim)(h)
 
     sigma = jnp.exp(0.5 * log_sigma)
-    eps = jax.random.normal(rng_key, shape=mu.shape)
-
+    eps = jax.random.normal(hk.next_rng_key(), shape=mu.shape)
     z = mu + sigma * eps
 
     return z, mu, log_sigma
@@ -185,22 +183,6 @@ def sinusoid_position_encoding(
     hidden_size: int,
     max_timescale: float = 1e4,
 ) -> np.ndarray:
-  """Creates sinusoidal encodings from the original transformer paper.
-
-  The returned values are, for all i < D/2:
-    array[pos, i] = sin(pos / (max_timescale^(2*i / D)))
-    array[pos, D/2 + i] = cos(pos / (max_timescale^(2*i / D)))
-
-  Args:
-    sequence_length: Sequence length.
-    hidden_size: Dimension of the positional encoding vectors, D. Should be
-      even.
-    max_timescale: Maximum timescale for the frequency.
-
-  Returns:
-    An array of shape [L, D] if `add_negative` or `keep_positive_side` is
-    `False`, else [2 * L, D].
-  """
   freqs = np.arange(0, hidden_size + 1, 2)
   inv_freq = max_timescale ** (-freqs / hidden_size)
 
@@ -211,39 +193,6 @@ def sinusoid_position_encoding(
       [np.sin(sinusoid_inp), np.cos(sinusoid_inp)], axis=-1
   )
   return embeddings[:, :hidden_size]
-
-"""
-def embed_sequences(
-    sequences: jax.Array,
-    config: TransformerConfig,
-) -> jax.Array:
-  # Returns embeddings for sequences of tokens.
-  embs_init = hk.initializers.TruncatedNormal(stddev=config.emb_init_scale)
-  embeddings_layer = hk.Embed(
-      vocab_size=config.vocab_size,
-      embed_dim=config.embedding_dim,
-      lookup_style=hk.EmbedLookupStyle.ARRAY_INDEX,
-      w_init=embs_init,
-  )
-  embeddings = embeddings_layer(sequences)
-  embeddings *= jnp.sqrt(config.embedding_dim)
-
-  _, sequence_length, embedding_size = embeddings.shape
-  match config.pos_encodings:
-    case PositionalEncodings.SINUSOID:
-      pos_encodings = sinusoid_position_encoding(
-          sequence_length=sequence_length,
-          hidden_size=embedding_size,
-      )
-    case PositionalEncodings.LEARNED:
-      assert sequence_length <= config.max_sequence_length
-      positions = jnp.arange(sequence_length)
-      pos_encodings = hk.Embed(
-          vocab_size=config.max_sequence_length,
-          embed_dim=embedding_size,
-      )(positions)
-  return embeddings + pos_encodings
-"""
 
 def embed_sequences(sequences, config):
   emb = hk.Embed(
@@ -275,39 +224,12 @@ def shift_right(sequences: jax.Array) -> jax.Array:
   padded_sequences = jnp.concatenate([bos_array, sequences], axis=1)
   return padded_sequences[:, :-1]
 
-"""
-def _mlp_block(inputs: jax.Array, config: TransformerConfig) -> jax.Array:
-  # Gated MLP block for the Transformer.
-  ffn_dim = config.embedding_dim * config.widening_factor
-  split_1 = hk.Linear(ffn_dim, with_bias=False)(inputs)
-  split_2 = hk.Linear(ffn_dim, with_bias=False)(inputs)
-  gate_output = jnn.silu(split_1) * split_2
-  return hk.Linear(config.embedding_dim, with_bias=False)(gate_output)
-"""
-
 def _mlp_block(x, config):
   ffn_dim = config.embedding_dim * config.widening_factor
   a = hk.Linear(ffn_dim, with_bias=False)(x)
   b = hk.Linear(ffn_dim, with_bias=False)(x)
   return hk.Linear(config.embedding_dim, with_bias=False)(jnn.silu(a) * b)
 
-"""
-def _attention_block(inputs: jax.Array, config: TransformerConfig) -> jax.Array:
-  # Attention block for the Transformer.
-  batch_size, sequence_length = inputs.shape[:2]
-  if config.use_causal_mask:
-    causal_mask = np.tril(
-        np.ones((batch_size, 1, sequence_length, sequence_length))
-    )
-  else:
-    causal_mask = None
-  block = MultiHeadDotProductAttention(
-      num_heads=config.num_heads,
-      num_hiddens_per_head=config.embedding_dim // config.num_heads,
-      apply_qk_layernorm=config.apply_qk_layernorm,
-  )
-  return block(inputs_q=inputs, inputs_kv=inputs, mask=causal_mask)
-"""
 def _attention_block(x, config):
   B, T = x.shape[:2]
 
@@ -323,38 +245,6 @@ def _attention_block(x, config):
   )
 
   return attn(x, x, mask)
-
-"""
-def transformer_decoder(
-    targets: jax.Array,
-    config: TransformerConfig,
-) -> jax.Array:
-  # Right shift the targets to get the inputs (the first token is now a 0).
-  inputs = shift_right(targets)
-
-  # Embeds the inputs and adds positional encodings.
-  embeddings = embed_sequences(inputs, config)
-
-  h = embeddings
-  for _ in range(config.num_layers):
-    attention_input = layer_norm(h)
-    attention = _attention_block(attention_input, config)
-    h += attention
-
-    mlp_input = layer_norm(h)
-    mlp_output = _mlp_block(mlp_input, config)
-    h += mlp_output
-
-  if config.apply_post_ln:
-    h = layer_norm(h)
-
-  h_pooled = jnp.mean(h, axis=1)
-  latent_head = LatentHead(config.latent_dim)
-  z, mu, log_sigma = latent_head(h_pooled)
-  logits = hk.Linear(config.output_size)(z)
-  log_probs = jnn.log_softmax(logits, axis=-1)
-  return log_probs, mu, log_sigma
-"""
 
 def transformer_decoder(targets, config):
   inputs = shift_right(targets)
@@ -379,7 +269,9 @@ def transformer_decoder(targets, config):
   latent_head = LatentHead(config.latent_dim)
   z, mu, log_sigma = latent_head(h_pooled)
 
-  logits = hk.Linear(config.output_size)(z)
+  # Expand latent back to a token-like representation for prediction.
+  z_expanded = hk.Linear(config.embedding_dim)(z)
+  logits = hk.Linear(config.output_size)(z_expanded)
   log_probs = jnn.log_softmax(logits, axis=-1)
 
   return log_probs, mu, log_sigma

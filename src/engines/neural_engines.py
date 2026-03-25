@@ -87,7 +87,7 @@ class ActionValueEngine(NeuralEngine):
         [sequences, legal_actions, dummy_return_buckets],
         axis=1,
     )
-    return {'log_probs': self.predict_fn(sequences)[:, -1], 'fen': board.fen()}
+    return {'log_probs': self.predict_fn(sequences), 'fen': board.fen()}
 
   def play(self, board: chess.Board) -> chess.Move:
     return_buckets_log_probs = self.analyse(board)['log_probs']
@@ -115,7 +115,7 @@ class StateValueEngine(NeuralEngine):
     tokenized_fens = np.stack(tokenized_fens, axis=0).astype(np.int32)
     dummy_return_buckets = np.zeros((len(fens), 1), dtype=np.int32)
     sequences = np.concatenate([tokenized_fens, dummy_return_buckets], axis=1)
-    return predict_fn(sequences)[:, -1]
+    return predict_fn(sequences)
 
   def analyse(self, board: chess.Board) -> engine.AnalysisResult:
     """Defines a policy that predicts action and action value."""
@@ -164,7 +164,7 @@ class BCEngine(NeuralEngine):
     tokenized_fen = np.expand_dims(tokenized_fen, axis=0)
     dummy_actions = np.zeros((1, 1), dtype=np.int32)
     sequences = np.concatenate([tokenized_fen, dummy_actions], axis=1)
-    total_action_log_probs = self.predict_fn(sequences)[0, -1]
+    total_action_log_probs = self.predict_fn(sequences)[0]
     assert len(total_action_log_probs) == utils.NUM_ACTIONS
 
     # We must renormalize the output distribution to only the legal moves.
@@ -206,11 +206,14 @@ def wrap_predict_fn(
   def fixed_predict_fn(sequences: np.ndarray) -> np.ndarray:
     """Wrapper around the predictor `predict` function."""
     assert sequences.shape[0] == batch_size
-    return jitted_predict_fn(
+    outputs = jitted_predict_fn(
         params=params,
         targets=sequences,
-        rng=None,
+        rng=jax.random.PRNGKey(0),
     )
+    if isinstance(outputs, tuple):
+      return outputs[0]
+    return outputs
 
   def predict_fn(sequences: np.ndarray) -> np.ndarray:
     """Wrapper to collate batches of sequences of fixed size."""

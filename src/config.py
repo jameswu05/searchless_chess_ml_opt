@@ -70,6 +70,8 @@ class TrainConfig:
   save_frequency: int | None = None
   # The frequency of logging in gradient steps (`None` means no logging).
   log_frequency: int | None = None
+  # Weight of the KL divergence term for VAE training.
+  kl_weight: float = 1e-3
 
 
 @dataclasses.dataclass(kw_only=True)

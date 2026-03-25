@@ -57,17 +57,19 @@ def replicate(
   )
 
 
-def make_loss_fn(predictor: constants.Predictor) -> Any:
+def make_loss_fn(predictor: constants.Predictor, kl_weight: float) -> Any:
   """Returns the loss function for `update_parameters`.
 
   Args:
     predictor: The predictor to evaluate.
+    kl_weight: Weight for KL divergence term in VAE loss.
   """
 
   def loss_fn(
       params: hk.Params,
       sequences: constants.Sequences,
       mask: constants.LossMask,
+      rng: jax.Array,
   ) -> jnp.float32:
     """Returns the loss for the model and the last state.
 
@@ -77,15 +79,20 @@ def make_loss_fn(predictor: constants.Predictor) -> Any:
       mask: Mask to apply to the losses. True means the loss will not be
         computed there.
     """
-    conditionals = predictor.predict(params=params, targets=sequences, rng=None)
-    true_conditionals = jnp.take_along_axis(
-        conditionals, sequences[..., None], axis=-1
-    )[..., 0]
-    true_conditionals = jnp.where(mask, 0.0, true_conditionals)
-    marginals = jnp.sum(true_conditionals, axis=1)
-    # We need to clip to avoid a division by 0 below.
-    seq_lengths = jnp.clip(jnp.sum(1 - mask, axis=1), a_min=1)
-    return -jnp.mean(marginals / seq_lengths)
+    log_probs, mu, log_sigma = predictor.predict(
+        params=params,
+        targets=sequences,
+        rng=rng,
+    )
+    # We only train on the return bucket (last token) for these datasets.
+    targets = sequences[:, -1]
+    nll = -jnp.take_along_axis(log_probs, targets[:, None], axis=-1)[:, 0]
+
+    # KL divergence between N(mu, sigma) and N(0, I).
+    kl = 0.5 * jnp.sum(
+        jnp.exp(log_sigma) + jnp.square(mu) - 1.0 - log_sigma, axis=-1
+    )
+    return jnp.mean(nll + kl_weight * kl)
 
   return loss_fn
 
@@ -107,6 +114,7 @@ def update_parameters(
     opt_state: optax.OptState,
     sequences: constants.Sequences,
     loss_mask: constants.LossMask,
+    rng: jax.Array,
     grad_fn: Any,
     optimizer: optax.GradientTransformation,
 ) -> tuple[hk.Params, hk.Params, optax.OptState, jnp.float32, jnp.float32]:
@@ -130,7 +138,7 @@ def update_parameters(
     The updated parameters, ema of parameters, optimizer state, the loss and
     the gradient norm.
   """
-  loss, grad = grad_fn(params, sequences, loss_mask)
+  loss, grad = grad_fn(params, sequences, loss_mask, rng)
   updates, new_opt_state = optimizer.update(grad, opt_state)
   new_params = optax.apply_updates(params, updates)
   grad_norm_unclipped = optax.global_norm(grad)

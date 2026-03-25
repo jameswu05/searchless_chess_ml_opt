@@ -28,8 +28,6 @@ from searchless_chess.src import training
 from searchless_chess.src import transformer
 from searchless_chess.src import utils
 
-import jax.numpy as jnp
-
 
 _POLICY = flags.DEFINE_enum(
     'policy',
@@ -37,15 +35,6 @@ _POLICY = flags.DEFINE_enum(
     config_lib.POLICY_TYPES,
     'The policy used to play moves with the model.',
 )
-
-def kl_divergence(mu, log_sigma):
-  return -0.5 * jnp.mean(
-    jnp.sum(
-      1 + log_sigma - jnp.square(mu) - jnp.exp(log_sigma),
-      axis=-1
-    )
-  )
-
 
 def main(argv: Sequence[str]) -> None:
   if len(argv) > 1:
@@ -88,6 +77,7 @@ def main(argv: Sequence[str]) -> None:
       num_steps=20,
       ckpt_frequency=5,
       save_frequency=10,
+      kl_weight=1e-3,
   )
   eval_config = config_lib.EvalConfig(
       data=config_lib.DataConfig(

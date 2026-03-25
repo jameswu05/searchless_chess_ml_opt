@@ -70,7 +70,10 @@ def train(
   opt_state = optimizer.init(params)
 
   # Create the gradient and update functions.
-  loss_fn = training_utils.make_loss_fn(predictor=predictor)
+  loss_fn = training_utils.make_loss_fn(
+      predictor=predictor,
+      kl_weight=train_config.kl_weight,
+  )
   grad_fn = jax.value_and_grad(loss_fn)
   update_fn = functools.partial(
       training_utils.update_parameters,
@@ -89,6 +92,8 @@ def train(
   opt_state = training_utils.replicate(opt_state, sharding)
 
   latest_step = 0
+  rng = jrandom.PRNGKey(predictor_config.seed + 1)
+  rng = jrandom.fold_in(rng, jax.process_index())
 
   # Initialize the checkpointer and restore any previous checkpoints.
   if train_config.ckpt_frequency is not None:
@@ -138,12 +143,14 @@ def train(
     sequences = jax.lax.with_sharding_constraint(sequences, sharding)
     loss_mask = jax.lax.with_sharding_constraint(loss_mask, sharding)
 
+    rng, step_rng = jrandom.split(rng)
     params, params_ema, opt_state, loss, grad_norm_unclipped = update_fn(
         params=params,
         params_ema=params_ema,
         opt_state=opt_state,
         sequences=sequences,
         loss_mask=loss_mask,
+        rng=step_rng,
     )
 
     if train_config.log_frequency is not None:
