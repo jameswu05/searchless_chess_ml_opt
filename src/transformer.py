@@ -48,6 +48,7 @@ class TransformerConfig:
   # The number of latent tokens
   latent_tokens: int = 16
   latent_dim: int = 128
+  latent_decoder_layers: int = 2
   # The number of multi-head attention layers.
   num_layers: int = 4
   # The number of heads per layer.
@@ -246,13 +247,16 @@ def _attention_block(x, config):
 
   return attn(x, x, mask)
 
-def transformer_decoder(targets, config):
-  inputs = shift_right(targets)
-  h = embed_sequences(inputs, config)
+def _decoder_block(x, config):
+  x = x + _attention_block(layer_norm(x), config)
+  x = x + _mlp_block(layer_norm(x), config)
+  return x
+
+def transformer_decoder(sequences, config):
+  h = embed_sequences(sequences, config)
 
   for _ in range(config.num_layers):
-    h = h + _attention_block(layer_norm(h), config)
-    h = h + _mlp_block(layer_norm(h), config)
+    h = _decoder_block(h, config)
 
   if config.apply_post_ln:
     h = layer_norm(h)
@@ -269,9 +273,18 @@ def transformer_decoder(targets, config):
   latent_head = LatentHead(config.latent_dim)
   z, mu, log_sigma = latent_head(h_pooled)
 
-  # Expand latent back to a token-like representation for prediction.
-  z_expanded = hk.Linear(config.embedding_dim)(z)
-  logits = hk.Linear(config.output_size)(z_expanded)
+  z_token = hk.Linear(config.embedding_dim)(z)
+  z_token = jnp.expand_dims(z_token, axis=1)
+  h = jnp.concatenate([h, z_token], axis=1)
+
+  for _ in range(config.latent_decoder_layers):
+    h = _decoder_block(h, config)
+  
+  if config.apply_post_ln:
+    h = layer_norm(h)
+
+  h_last = h[:, -1]
+  logits = hk.Linear(config.output_size)(h_last)
   log_probs = jnn.log_softmax(logits, axis=-1)
 
   return log_probs, mu, log_sigma

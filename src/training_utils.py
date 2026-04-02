@@ -81,7 +81,7 @@ def make_loss_fn(predictor: constants.Predictor, kl_weight: float) -> Any:
     """
     log_probs, mu, log_sigma = predictor.predict(
         params=params,
-        targets=sequences,
+        sequences=sequences,
         rng=rng,
     )
     # We only train on the return bucket (last token) for these datasets.
