@@ -208,7 +208,7 @@ def wrap_predict_fn(
     assert sequences.shape[0] == batch_size
     outputs = jitted_predict_fn(
         params=params,
-        targets=sequences,
+        sequences=sequences,
         rng=jax.random.PRNGKey(0),
     )
     if isinstance(outputs, tuple):
