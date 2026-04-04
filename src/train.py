@@ -56,28 +56,31 @@ def main(argv: Sequence[str]) -> None:
       output_size=output_size,
       pos_encodings=transformer.PositionalEncodings.LEARNED,
       max_sequence_length=tokenizer.SEQUENCE_LENGTH + 2,
-      num_heads=4,
-      num_layers=4,
-      embedding_dim=64,
+      num_heads=8,
+      num_layers=8,
+      embedding_dim=256,
       apply_post_ln=True,
       apply_qk_layernorm=False,
       use_causal_mask=False,
+      latent_tokens=16,
+      latent_dim=128,
+      latent_decoder_layers=2
   )
   train_config = config_lib.TrainConfig(
-      learning_rate=1e-4,
+      learning_rate=4e-4,
+      num_steps=5_000_000,
+      kl_weight=1e-3,
       data=config_lib.DataConfig(
-          batch_size=256,
+          batch_size=1024,
           shuffle=True,
           worker_count=0,  # 0 disables multiprocessing.
-          num_return_buckets=num_return_buckets,
+          num_return_buckets=128,
           policy=policy,
           split='train',
       ),
-      log_frequency=1,
-      num_steps=20,
-      ckpt_frequency=5,
-      save_frequency=10,
-      kl_weight=1e-3,
+      log_frequency=1000,
+      ckpt_frequency=100_000,
+      save_frequency=500_000
   )
   eval_config = config_lib.EvalConfig(
       data=config_lib.DataConfig(
