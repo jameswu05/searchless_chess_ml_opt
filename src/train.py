@@ -79,8 +79,8 @@ def main(argv: Sequence[str]) -> None:
           split='train',
       ),
       log_frequency=1000,
-      ckpt_frequency=100_000,
-      save_frequency=500_000
+      ckpt_frequency=10_000,
+      save_frequency=50_000
   )
   eval_config = config_lib.EvalConfig(
       data=config_lib.DataConfig(
