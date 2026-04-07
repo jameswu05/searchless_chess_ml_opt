@@ -3,16 +3,16 @@ import csv
 import pandas as pd
 import matplotlib.pyplot as plt
 
-log_file = "data/output/340k_log.txt" 
-output_csv = "data/output/340k_tester.csv"
+log_file = "data/log.txt" 
+output_csv = "data/output/output_log.csv"
 save_dir = "data/output"
-split_step = 50000
-STEP_INTERVAL = 1000
+split_step = 100000
+STEP_INTERVAL = 5000
 
 #plotting helpers
 #-------------------
 def plot_full(df, save_dir):
-    fig, axs = plt.subplots(2, 1, figsize=(7, 8))
+    fig, axs = plt.subplots(2, 1, figsize=(7, 9))
 
     #Loss
     axs[0].plot(df["step"], df["loss"])
@@ -31,7 +31,7 @@ def plot_full(df, save_dir):
     plt.close()
 
     # Grad
-    fig, axs = plt.subplots(2, 1, figsize=(7, 8))
+    fig, axs = plt.subplots(2, 1, figsize=(7, 9))
 
     axs[0].plot(df["step"], df["grad_norm_unclipped"])
     axs[0].set_title("Gradient Norm (Linear)")
@@ -48,63 +48,63 @@ def plot_full(df, save_dir):
     plt.savefig(f"{save_dir}/grad_full.png", dpi=300)
     plt.close()
 
-def plot_early(df, save_dir, split_step=50000):
+def plot_early(df, save_dir, split_step=100000):
     df_early = df[df["step"] <= split_step]
 
     #Loss
-    fig, axs = plt.subplots(2, 1, figsize=(7, 8))
+    fig, axs = plt.subplots(2, 1, figsize=(7, 9))
 
     axs[0].plot(df_early["step"], df_early["loss"])
-    axs[0].set_title("Loss (0–50k Linear)")
+    axs[0].set_title("Loss (0–100k Linear)")
 
     axs[1].plot(df_early["step"], df_early["loss"])
     axs[1].set_yscale("log")
-    axs[1].set_title("Loss (0–50k Log)")
+    axs[1].set_title("Loss (0–100k Log)")
 
     plt.tight_layout()
     plt.savefig(f"{save_dir}/loss_early.png", dpi=300)
     plt.close()
 
     #Grad
-    fig, axs = plt.subplots(2, 1, figsize=(7, 8))
+    fig, axs = plt.subplots(2, 1, figsize=(7, 9))
 
     axs[0].plot(df_early["step"], df_early["grad_norm_unclipped"])
-    axs[0].set_title("Grad Norm (0–50k Linear)")
+    axs[0].set_title("Grad Norm (0–100k Linear)")
 
     axs[1].plot(df_early["step"], df_early["grad_norm_unclipped"])
     axs[1].set_yscale("log")
-    axs[1].set_title("Grad Norm (0–50k Log)")
+    axs[1].set_title("Grad Norm (0–100k Log)")
 
     plt.tight_layout()
     plt.savefig(f"{save_dir}/grad_early.png", dpi=300)
     plt.close()
 
-def plot_late(df, save_dir, split_step=50000):
+def plot_late(df, save_dir, split_step=100000):
     df_late = df[df["step"] > split_step]
 
     # Loss
-    fig, axs = plt.subplots(2, 1, figsize=(7, 8))
+    fig, axs = plt.subplots(2, 1, figsize=(7, 9))
 
     axs[0].plot(df_late["step"], df_late["loss"])
-    axs[0].set_title("Loss (50k+ Linear)")
+    axs[0].set_title("Loss (100k+ Linear)")
 
     axs[1].plot(df_late["step"], df_late["loss"])
     axs[1].set_yscale("log")
-    axs[1].set_title("Loss (50k+ Log)")
+    axs[1].set_title("Loss (100k+ Log)")
 
     plt.tight_layout()
     plt.savefig(f"{save_dir}/loss_late.png", dpi=300)
     plt.close()
 
     #Grad
-    fig, axs = plt.subplots(2, 1, figsize=(7, 8))
+    fig, axs = plt.subplots(2, 1, figsize=(7, 9))
 
     axs[0].plot(df_late["step"], df_late["grad_norm_unclipped"])
-    axs[0].set_title("Grad Norm (50k+ Linear)")
+    axs[0].set_title("Grad Norm (100k+ Linear)")
 
     axs[1].plot(df_late["step"], df_late["grad_norm_unclipped"])
     axs[1].set_yscale("log")
-    axs[1].set_title("Grad Norm (50k+ Log)")
+    axs[1].set_title("Grad Norm (100k+ Log)")
 
     plt.tight_layout()
     plt.savefig(f"{save_dir}/grad_late.png", dpi=300)
@@ -125,7 +125,7 @@ with open(log_file, "r") as f:
             loss = float(match.group(2))
             grad = float(match.group(3))
 
-            if step % STEP_INTERVAL == 0:
+            if step % STEP_INTERVAL == 0 and step <= 1000000:
                 rows.append([step, loss, grad])
 
 with open(output_csv, "w", newline="") as f:
